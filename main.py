@@ -7,9 +7,6 @@ import os
 
 load_dotenv()
 
-# 👇 Debug print
-print("🔍 SLACK_BOT_TOKEN:", os.getenv("SLACK_BOT_TOKEN"))
-print("🔍 SLACK_CHANNEL:", os.getenv("SLACK_CHANNEL"))
 
 app = FastAPI()
 
