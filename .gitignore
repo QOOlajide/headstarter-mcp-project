@@ -2,3 +2,7 @@
 venv/
 __pycache__/
 *.pyc
+meeting_cache.db
+credentials.json
+token.json
+client_secret*.json
