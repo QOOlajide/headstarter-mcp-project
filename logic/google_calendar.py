@@ -2,6 +2,7 @@
 Google Calendar API Integration
 Handles calendar operations including free/busy queries and event creation with Meet links
 """
+import uuid
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 from googleapiclient.discovery import build
@@ -55,59 +56,57 @@ async def create_calendar_event(
     start_time: str,
     duration_minutes: int,
     title: str,
-    description: str = ""
+    description: str = "",
+    send_updates: str = "none",
 ) -> Dict[str, Any]:
     """
-    Create a Google Calendar event with Google Meet link
-    Returns the created event object
+    Create a Google Calendar event with Google Meet link.
+    Slack-first flow uses attendees=[] and send_updates="none".
     """
     try:
         service = get_calendar_service()
-        
-        # Parse start time and calculate end time
-        start_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+
+        start_dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
         end_dt = start_dt + timedelta(minutes=duration_minutes)
-        
-        # Format times for Google Calendar API (RFC3339)
-        start_time_rfc = start_dt.isoformat()
-        end_time_rfc = end_dt.isoformat()
-        
-        # Create event with Google Meet conference
+
         event = {
-            'summary': title,
-            'description': description,
-            'start': {
-                'dateTime': start_time_rfc,
-                'timeZone': 'UTC',
+            "summary": title,
+            "description": description,
+            "start": {
+                "dateTime": start_dt.isoformat(),
+                "timeZone": "UTC",
             },
-            'end': {
-                'dateTime': end_time_rfc,
-                'timeZone': 'UTC',
+            "end": {
+                "dateTime": end_dt.isoformat(),
+                "timeZone": "UTC",
             },
-            'attendees': [{'email': email} for email in attendees],
-            'conferenceData': {
-                'createRequest': {
-                    'requestId': f"meet-{start_dt.timestamp()}",
-                    'conferenceSolutionKey': {'type': 'hangoutsMeet'}
+            # Clarification: empty attendees bypasses email invite maintenance
+            "attendees": [{"email": email} for email in (attendees or [])],
+            "conferenceData": {
+                "createRequest": {
+                    "requestId": str(uuid.uuid4()),
+                    "conferenceSolutionKey": {"type": "hangoutsMeet"},
                 }
             },
-            'reminders': {
-                'useDefault': False,
-                'overrides': [
-                    {'method': 'email', 'minutes': 24 * 60},  # 1 day before
-                    {'method': 'popup', 'minutes': 15},  # 15 minutes before
+            "reminders": {
+                "useDefault": False,
+                "overrides": [
+                    {"method": "popup", "minutes": 15},
                 ],
             },
         }
-        
-        # Insert event with conference data
-        created_event = service.events().insert(
-            calendarId='primary',
-            body=event,
-            conferenceDataVersion=1,
-            sendUpdates='all'  # Send invitations to attendees
-        ).execute()
-        
+
+        created_event = (
+            service.events()
+            .insert(
+                calendarId="primary",
+                body=event,
+                conferenceDataVersion=1,
+                sendUpdates=send_updates,
+            )
+            .execute()
+        )
+
         return created_event
     except HttpError as error:
         print(f"An error occurred creating event: {error}")
