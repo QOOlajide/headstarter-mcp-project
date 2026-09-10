@@ -1,240 +1,122 @@
-# MCP Meeting Scheduler Server
+# MCP Meeting Scheduler
 
-An MCP (Model Context Protocol) server that automates end-to-end meeting scheduling by integrating Slack, Google Calendar, and Notion. This server allows AI assistants to schedule meetings, find available time slots, create calendar events with Google Meet links, send Slack notifications, and automatically create meeting notes pages in Notion.
+Cursor MCP server that schedules meetings from natural language: Slack is the roster, Google Calendar holds the time and Meet link, Notion stores the row. A companion Chrome extension + FastAPI hub (optionally Docker) turn Meet captions into Notion summaries.
 
-## Features
+## What it does
 
-- **Google Calendar Integration**: Finds available time slots and creates calendar events with Google Meet links
-- **Slack Notifications**: Sends formatted meeting notifications to Slack channels
-- **Notion Documentation**: Automatically creates meeting notes pages with agenda and action items
-- **OAuth2 Authentication**: Secure authentication for all integrated services
-- **MCP Protocol**: Compatible with AI assistants that support the Model Context Protocol
+1. **MCP `schedule_meeting`** — maps messy wording onto `department` and/or `slack_handles`.
+2. **Slack** — department → team channel + `<!channel>`; ad-hoc → group DM. Emails from Slack profiles.
+3. **Google Calendar** — Meet link + calendar hold for those emails (`sendUpdates=all`).
+4. **Notion** — Scheduled row in Meetings & Summaries.
+5. **After the call (companion)** — Chrome extension buffers Live Captions; on leave beacons to the FastAPI hub → Gemini → summary + Actionable Directives. Or MCP/REST `finalize_meeting` marks Completed with a no-transcript note.
 
-## Architecture
+## How the meeting time is chosen
 
-The server orchestrates a complete workflow:
+Roster first, then time. **Team and ad-hoc differ on free/busy.**
 
-1. **Find Available Slot**: Queries Google Calendar API to find shared available time slots
-2. **Create Calendar Event**: Creates a Google Calendar event with Google Meet link
-3. **Send Slack Notification**: Sends a formatted message to the configured Slack channel
-4. **Create Notion Page**: Creates a meeting notes page in Notion with all meeting details
+| | Team (department) | Ad-hoc (`slack_handles`) |
+|---|---|---|
+| Exact `start_time` | Book it | Book it |
+| `preferred_start` / `preferred_end` | Book at window start (no channel free/busy) | Free/busy those people in the window |
+| No time | Next business-hours slot (9–17 in `SCHEDULER_TIMEZONE`) | Free/busy over default business windows |
+| No shared free slot | N/A (never requires whole channel free) | Fail — create nothing |
+| Calendar hold | Channel member emails | Named people emails |
 
-## Prerequisites
+Busy invitees can decline; that does not cancel a created team meeting. Env defaults: `SCHEDULER_TIMEZONE=America/New_York`, `SCHEDULER_SEARCH_DAYS=3`.
 
-- Python 3.8 or higher
-- Google Cloud Project with Calendar API enabled
-- Slack workspace with a bot app installed
-- Notion workspace with an integration created
-- `uv` package manager (recommended) or `pip`
+**Scale caveat:** free/busy only sees calendars the OAuth Google user can read. Use it for small guest lists, not whole channels.
 
-## Installation
+## Two routing modes
 
-1. **Clone the repository**:
-   ```bash
-   git clone <your-repo-url>
-   cd Headstarter-MCR-Project
-   ```
+| | Department | Ad-hoc |
+|---|---|---|
+| Trigger | `department` set, `slack_handles` empty | `slack_handles` non-empty (wins) |
+| Slack | Existing public channel, `<!channel>` | Group DM |
+| Calendar hold | Channel members with profile emails | Named people with profile emails |
+| Notion `Department / Team` | The enum | Empty (people-only) |
 
-2. **Install dependencies**:
-   ```bash
-   # Using uv (recommended)
-   uv add "mcp[cli]"
-   uv add fastapi uvicorn httpx python-dotenv
-   uv add google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client
-   uv add notion-client
-   
-   # Or using pip
-   pip install -r requirements.txt
-   ```
+### Department → Slack channel
 
-3. **Set up Google Calendar API**:
-   - Go to [Google Cloud Console](https://console.cloud.google.com/)
-   - Create a new project or select an existing one
-   - Enable the Google Calendar API
-   - Create OAuth 2.0 credentials (Desktop app)
-   - Download the credentials file and save it as `credentials.json` in the project root
-   - Required scopes:
-     - `https://www.googleapis.com/auth/calendar`
-     - `https://www.googleapis.com/auth/calendar.events`
+| Department enum | Slack channel |
+|---|---|
+| Engineering | `#engineering` |
+| Product | `#product` |
+| Cloud | `#cloud` |
+| Data Science | `#data-science` |
+| Security | `#security` |
 
-4. **Set up Slack Bot**:
-   - Go to [Slack API](https://api.slack.com/apps)
-   - Create a new app or use an existing one
-   - Install the app to your workspace
-   - Copy the Bot User OAuth Token (starts with `xoxb-`)
-   - Required scopes: `chat:write`, `channels:read`
+Bot must be **in** each channel.
 
-5. **Set up Notion Integration**:
-   - Go to [Notion Integrations](https://www.notion.so/my-integrations)
-   - Create a new integration
-   - Copy the Internal Integration Token
-   - Create a Notion database for meetings (or use an existing one)
-   - Share the database with your integration
-   - Copy the database ID from the database URL
+## Setup
 
-6. **Configure environment variables**:
-   ```bash
-   cp .env.example .env
-   # Edit .env with your credentials
-   ```
-
-## Configuration
-
-Create a `.env` file in the project root with the following variables:
-
-```env
-SLACK_BOT_TOKEN=xoxb-your-token-here
-SLACK_CHANNEL=#general
-GOOGLE_CREDENTIALS_FILE=credentials.json
-GOOGLE_TOKEN_FILE=token.json
-NOTION_API_KEY=secret_your-key-here
-NOTION_DATABASE_ID=your-database-id-here
+```powershell
+.\venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-### Notion Database Schema
+`.env`: `SLACK_BOT_TOKEN`, `NOTION_API_KEY`, `NOTION_MEETINGS_DATABASE_ID`, `NOTION_DIRECTIVES_DATABASE_ID`, `GEMINI_API_KEY`; optional `SCHEDULER_TIMEZONE`, `SCHEDULER_SEARCH_DAYS`. Google: `credentials.json` / `token.json`.
 
-Your Notion database should have the following properties:
-- **Title** (title): Meeting title
-- **Date** (date): Scheduled meeting time
-- **Duration** (rich_text): Meeting duration
-
-The integration will automatically add content blocks for attendees, meeting link, agenda, action items, and notes.
-
-## Usage
-
-### Running the MCP Server
-
-```bash
-python mcp_server.py
+```powershell
+.\venv\Scripts\python.exe scripts\setup_notion_dbs.py --parent-page-id "YOUR_PARENT_PAGE_URL" --write-env
 ```
 
-The server communicates via stdio and follows the MCP protocol. It can be connected to MCP-compatible clients.
+MCP: `.cursor/mcp.json` (`envFile` → `.env`). Restart MCP after `.env` changes.
 
-### Using with MCP Clients
+### Transcript hub (FastAPI)
 
-The server exposes a single tool: `schedule_meeting`
+Local debug:
 
-**Tool Parameters**:
-- `attendees` (array of strings): List of attendee email addresses
-- `duration_minutes` (integer): Duration of the meeting in minutes
-- `preferred_start` (string): Preferred start time in ISO format (e.g., "2025-06-28T09:00:00")
-- `preferred_end` (string): Preferred end time in ISO format (e.g., "2025-06-28T17:00:00")
-- `meeting_title` (string): Title of the meeting
-- `meeting_description` (string, optional): Description/agenda for the meeting
-
-**Example Tool Call**:
-```json
-{
-  "name": "schedule_meeting",
-  "arguments": {
-    "attendees": ["alice@example.com", "bob@example.com"],
-    "duration_minutes": 30,
-    "preferred_start": "2025-06-28T09:00:00",
-    "preferred_end": "2025-06-28T17:00:00",
-    "meeting_title": "Project Planning Meeting",
-    "meeting_description": "Discuss Q3 roadmap and priorities"
-  }
-}
+```powershell
+.\venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
-### Testing Configuration
+Docker (same hub, portable; pass secrets via env — do not bake `.env` into the image):
 
-You can validate your configuration by running:
-
-```python
-from config import Config
-Config.print_config_status()
+```powershell
+docker compose up --build
+# or: docker build -t meeting-hub . && docker run --env-file .env -p 8000:8000 meeting-hub
 ```
 
-## Project Structure
+Deploy the image to Render/Railway/Fly and set the same env vars. The hub resolves meetings by **Notion `Google Meet URL`** (SQLite is optional local cache only).
+
+### Chrome extension
+
+1. Chrome → Extensions → Load unpacked → select `extension/`
+2. Options: set webhook URL (`http://127.0.0.1:8000/webhook/transcript` or your hosted URL)
+3. Join Meet with **Live Captions** on; leave the call to beacon
+
+Legacy one-off: paste `scripts/meet_caption_scraper.js` in the Meet console (same beacon contract).
+
+### Finalize without transcript
+
+- REST: `POST /finalize-meeting` with `{"meet_url":"..."}` or `{"notion_page_id":"..."}`
+- MCP: `finalize_meeting` with the same fields  
+Marks Status=Completed and appends a note that no transcript was received.
+
+## MCP tools
+
+**`schedule_meeting`** — `meeting_title` (required), optional `start_time`, `preferred_start`/`preferred_end`, `duration_minutes`, `department`, `slack_handles`. Omit `team_name`.
+
+**`finalize_meeting`** — `meet_url` and/or `notion_page_id`.
+
+## Layout
 
 ```
-.
-├── mcp_server.py              # Main MCP server entry point
-├── main.py                    # FastAPI REST API entry point (/schedule-meeting)
-├── config.py                  # Configuration management
-├── requirements.txt           # Python dependencies
-├── .env.example              # Environment variable template
-├── credentials.json          # Google OAuth credentials (not in repo)
-├── token.json                # Google OAuth token (generated, not in repo)
-├── auth/                     # Authentication modules
-│   ├── __init__.py
-│   ├── google_auth.py        # Google OAuth handler
-│   ├── slack_auth.py         # Slack token validation
-│   └── notion_auth.py        # Notion API key validation
-└── logic/                    # Business logic modules
-    ├── calendar_logic.py     # Calendar slot finding logic
-    ├── google_calendar.py    # Google Calendar API client
-    ├── slack_notifier.py     # Slack message sender
-    ├── notion_client.py      # Notion API client
-    └── meeting_orchestrator.py  # Workflow orchestrator
+mcp_server.py                 MCP stdio + schedule_meeting + finalize_meeting
+main.py                       FastAPI hub (schedule, transcript webhook, finalize)
+Dockerfile / docker-compose.yml   Transcript hub container
+extension/                    Chrome MV3 caption → webhook
+scripts/meet_caption_scraper.js   Legacy console scraper
+logic/meeting_orchestrator.py
+logic/slack_notifier.py
+logic/google_calendar.py
+logic/notion_client.py
+logic/gemini_synth.py
+logic/meeting_cache.py
 ```
-
-## Authentication Flow
-
-### Google Calendar
-1. First run: OAuth flow opens browser for authentication
-2. Token is saved to `token.json`
-3. Token is automatically refreshed when expired
-
-### Slack
-- Uses bot token from environment variables
-- Token is validated on each API call
-
-### Notion
-- Uses API key from environment variables
-- API key is validated on each API call
-
-## Error Handling
-
-The server includes comprehensive error handling:
-- Falls back to mock calendar data if Google Calendar API is unavailable
-- Validates all credentials before making API calls
-- Provides clear error messages for missing configuration
-- Handles API rate limits and timeouts gracefully
-
-## Development
-
-### Running Tests
-
-```bash
-# Validate configuration
-python -c "from config import Config; Config.print_config_status()"
-
-# Test individual modules
-python -c "from logic.slack_notifier import validate_slack_config; validate_slack_config()"
-```
-
-### Adding New Features
-
-1. Add new MCP tools in `mcp_server.py`
-2. Implement business logic in `logic/` modules
-3. Add authentication if needed in `auth/` modules
-4. Update configuration in `config.py` if new env vars are needed
 
 ## Troubleshooting
 
-### Google Calendar Authentication Issues
-- Ensure `credentials.json` is in the project root
-- Check that OAuth scopes include calendar permissions
-- Delete `token.json` and re-authenticate if token is corrupted
-
-### Slack Notifications Not Sending
-- Verify `SLACK_BOT_TOKEN` is correct and starts with `xoxb-`
-- Check that the bot is installed in your workspace
-- Verify `SLACK_CHANNEL` exists and bot has access
-
-### Notion Pages Not Creating
-- Verify `NOTION_API_KEY` is correct
-- Check that `NOTION_DATABASE_ID` is correct
-- Ensure the integration has access to the database
-- Verify database has required properties (Title, Date, Duration)
-
-## License
-
-[Your License Here]
-
-## Contributing
-
-[Your Contributing Guidelines Here]
-
+- Slack `channel_not_found`: bot not in channel, or stale `meeting_cache.db`.
+- Notion property errors: wrong DB IDs / schema (see `journal.md` for Notion 2026).
+- Transcript 404: Meet URL must match Notion `Google Meet URL`; hub must be reachable from the browser.
+- Pip `resolution-too-deep`: use lower bounds in `requirements.txt`.

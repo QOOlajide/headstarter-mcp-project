@@ -22,13 +22,15 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 SLACK_API_URL = "https://slack.com/api"
 
-# Department sync → expected existing public channel slug
+# Department sync → existing public Slack channel slug.
+# The bot must be invited to each channel or conversations.members
+# returns channel_not_found.
 DEPT_CHANNEL_SLUGS = {
     "Engineering": "engineering",
-    "Product": "product-team",
-    "Sales": "sales-team",
-    "Design": "design-team",
-    "Cross-Functional": "cross-functional",
+    "Product": "product",
+    "Cloud": "cloud",
+    "Data Science": "data-science",
+    "Security": "security",
 }
 
 
@@ -80,7 +82,8 @@ async def _slack_post(
     return data
 
 
-async def _list_public_channels(client: httpx.AsyncClient, token: str) -> list[dict]:
+async def _list_workspace_channels(client: httpx.AsyncClient, token: str) -> list[dict]:
+    """Public channels only — all department channels are public."""
     channels: list[dict] = []
     cursor: Optional[str] = None
     while True:
@@ -118,7 +121,7 @@ async def resolve_department_channel(
         return f"#{slug}", cached
 
     async with httpx.AsyncClient(timeout=15.0) as client:
-        for channel in await _list_public_channels(client, token):
+        for channel in await _list_workspace_channels(client, token):
             if channel.get("name") == slug:
                 set_channel_id(slug, channel["id"])
                 return f"#{slug}", channel["id"]

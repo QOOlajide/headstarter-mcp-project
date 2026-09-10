@@ -47,9 +47,10 @@ async def get_freebusy(attendees: List[str], time_min: str, time_max: str) -> Di
         print(f"An error occurred: {error}")
         raise
     except Exception as e:
+        # No fallback: an invented "everyone is free" answer would let us
+        # book a time nobody actually has. Fail loudly instead.
         print(f"Error querying freebusy: {e}")
-        # Fallback to empty busy times if API call fails
-        return {email: [] for email in attendees}
+        raise
 
 async def create_calendar_event(
     attendees: List[str],
@@ -61,7 +62,8 @@ async def create_calendar_event(
 ) -> Dict[str, Any]:
     """
     Create a Google Calendar event with Google Meet link.
-    Slack-first flow uses attendees=[] and send_updates="none".
+    Attendees are Slack-profile emails so guests get a calendar hold.
+    send_updates should be "all" when attendees is non-empty.
     """
     try:
         service = get_calendar_service()
@@ -69,18 +71,17 @@ async def create_calendar_event(
         start_dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
         end_dt = start_dt + timedelta(minutes=duration_minutes)
 
+        # dateTime carries its own UTC offset; do not stamp timeZone: UTC
+        # on top of it or Google renders the window in the wrong zone.
         event = {
             "summary": title,
             "description": description,
             "start": {
                 "dateTime": start_dt.isoformat(),
-                "timeZone": "UTC",
             },
             "end": {
                 "dateTime": end_dt.isoformat(),
-                "timeZone": "UTC",
             },
-            # Clarification: empty attendees bypasses email invite maintenance
             "attendees": [{"email": email} for email in (attendees or [])],
             "conferenceData": {
                 "createRequest": {

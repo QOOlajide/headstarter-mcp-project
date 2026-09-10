@@ -1,6 +1,7 @@
 """
 FastAPI webhook hub + optional REST scheduling endpoint.
-Exposes POST /webhook/transcript for Meet caption scraper beacons.
+Exposes POST /webhook/transcript for Meet caption scraper beacons
+and POST /finalize-meeting when no transcript arrives.
 """
 from typing import List, Optional
 
@@ -17,10 +18,12 @@ app = FastAPI(title="Meeting Automation Hub")
 
 class MeetingRequest(BaseModel):
     meeting_title: str
-    start_time: str
+    start_time: Optional[str] = None  # exact ISO time; omit for team default / ad-hoc freebusy
+    preferred_start: Optional[str] = None
+    preferred_end: Optional[str] = None
     duration_minutes: int = Field(default=30, gt=0, le=480)
     meeting_description: str = ""
-    department: Optional[str] = "Cross-Functional"
+    department: Optional[str] = None  # required unless slack_handles is set
     team_name: Optional[str] = None
     slack_handles: List[str] = Field(
         default_factory=list,
@@ -33,12 +36,54 @@ class TranscriptPayload(BaseModel):
     transcript: str
 
 
+class FinalizeMeetingRequest(BaseModel):
+    meet_url: Optional[str] = None
+    notion_page_id: Optional[str] = None
+
+
+async def _resolve_meeting_context(meet_url: Optional[str] = None, notion_page_id: Optional[str] = None):
+    """SQLite active meeting first, then Notion Google Meet URL lookup."""
+    from logic.meeting_cache import get_active_meeting
+    from logic.notion_client import find_meeting_page_by_meet_url
+
+    if notion_page_id:
+        return {
+            "notion_meeting_page_id": notion_page_id,
+            "meeting_title": "Meeting",
+            "meet_url": meet_url or "",
+            "participant_emails": [],
+            "source": "notion_page_id",
+        }
+
+    if not meet_url:
+        return None
+
+    meeting = get_active_meeting(meet_url)
+    if not meeting:
+        meeting = get_active_meeting(meet_url.rstrip("/"))
+    if meeting:
+        return {**meeting, "source": "sqlite"}
+
+    page = await find_meeting_page_by_meet_url(meet_url)
+    if not page:
+        return None
+    return {
+        "notion_meeting_page_id": page["id"],
+        "meeting_title": page["meeting_title"],
+        "meet_url": page["meet_url"],
+        "participant_emails": [],
+        "source": "notion",
+    }
+
+
 @app.post("/schedule-meeting")
 async def schedule_meeting(request: MeetingRequest):
     try:
         return await schedule_meeting_workflow(
             meeting_title=request.meeting_title,
             start_time=request.start_time,
+            preferred_start=request.preferred_start,
+            preferred_end=request.preferred_end,
             duration_minutes=request.duration_minutes,
             meeting_description=request.meeting_description,
             department=request.department,
@@ -54,7 +99,7 @@ async def schedule_meeting(request: MeetingRequest):
 @app.post("/webhook/transcript")
 async def webhook_transcript(request: Request):
     """
-    Ingest Meet caption scraper beacon.
+    Ingest Meet caption scraper / extension beacon.
     Maps Gemini assignees through Slack-extracted emails → Notion Assignee Email.
     """
     content_type = request.headers.get("content-type", "")
@@ -74,24 +119,23 @@ async def webhook_transcript(request: Request):
         return {"status": "ignored", "reason": "empty transcript"}
 
     from logic.gemini_synth import synthesize_transcript
-    from logic.meeting_cache import delete_active_meeting, get_active_meeting, get_slack_user
+    from logic.meeting_cache import delete_active_meeting, get_slack_user
     from logic.notion_client import sync_transcript_results
     from logic.slack_notifier import map_assignee_to_email
 
-    meeting = get_active_meeting(payload.meet_url)
-    if not meeting:
-        meeting = get_active_meeting(payload.meet_url.rstrip("/"))
+    meeting = await _resolve_meeting_context(meet_url=payload.meet_url)
     if not meeting:
         raise HTTPException(
             status_code=404,
-            detail=f"No active meeting cached for meet_url={payload.meet_url}",
+            detail=f"No meeting found for meet_url={payload.meet_url}",
         )
 
     known_emails = meeting.get("participant_emails") or []
-    # Rebuild lightweight participant records from cached emails + slack_users
     participants = []
     for email in known_emails:
-        participants.append({"email": email, "handle": email.split("@")[0], "display_name": ""})
+        participants.append(
+            {"email": email, "handle": email.split("@")[0], "display_name": ""}
+        )
 
     try:
         synthesized = synthesize_transcript(
@@ -102,7 +146,6 @@ async def webhook_transcript(request: Request):
             mapped = map_assignee_to_email(
                 item.get("assignee_email", ""), participants
             )
-            # If still not an email, try slack_users cache by handle
             if mapped and "@" not in mapped:
                 cached = get_slack_user(mapped)
                 if cached and cached.get("email"):
@@ -115,11 +158,13 @@ async def webhook_transcript(request: Request):
             summary_bullets=synthesized.get("summary_bullets", []),
             action_items=action_items,
         )
-        delete_active_meeting(meeting["meet_url"])
+        if meeting.get("meet_url"):
+            delete_active_meeting(meeting["meet_url"])
         return {
             "status": "ok",
             "meeting_title": meeting["meeting_title"],
             "notion_page_id": meeting["notion_meeting_page_id"],
+            "resolved_via": meeting.get("source"),
             "summary_count": len(synthesized.get("summary_bullets", [])),
             "action_item_count": len(action_items),
             "mapped_assignees": [a.get("assignee_email") for a in action_items],
@@ -128,6 +173,47 @@ async def webhook_transcript(request: Request):
     except Exception as exc:
         raise HTTPException(
             status_code=500, detail=f"Transcript processing failed: {exc}"
+        ) from exc
+
+
+@app.post("/finalize-meeting")
+async def finalize_meeting(request: FinalizeMeetingRequest):
+    """Mark Completed with a no-transcript note when captions never arrived."""
+    if not request.meet_url and not request.notion_page_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide meet_url or notion_page_id",
+        )
+
+    from logic.meeting_cache import delete_active_meeting
+    from logic.notion_client import finalize_meeting_without_transcript
+
+    meeting = await _resolve_meeting_context(
+        meet_url=request.meet_url,
+        notion_page_id=request.notion_page_id,
+    )
+    if not meeting:
+        raise HTTPException(
+            status_code=404,
+            detail="No meeting found for the given meet_url / notion_page_id",
+        )
+
+    try:
+        result = await finalize_meeting_without_transcript(
+            meeting["notion_meeting_page_id"]
+        )
+        if meeting.get("meet_url"):
+            delete_active_meeting(meeting["meet_url"])
+        return {
+            "status": "ok",
+            "notion_page_id": meeting["notion_meeting_page_id"],
+            "meeting_title": meeting.get("meeting_title"),
+            "resolved_via": meeting.get("source"),
+            "notion": result,
+        }
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Finalize failed: {exc}"
         ) from exc
 
 

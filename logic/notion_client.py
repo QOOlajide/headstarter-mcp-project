@@ -47,7 +47,7 @@ def _rich_text(content: str) -> List[Dict[str, Any]]:
 
 async def create_meeting_page(
     title: str,
-    department: str,
+    department: Optional[str],
     slack_channel: str,
     slack_channel_id: str,
     start_time: str,
@@ -61,19 +61,23 @@ async def create_meeting_page(
     if end_time:
         date_payload["end"] = end_time
 
+    properties: Dict[str, Any] = {
+        "Meeting Name": {
+            "title": [{"type": "text", "text": {"content": title}}]
+        },
+        "Slack Channel": {"rich_text": _rich_text(slack_channel)},
+        "Slack Channel ID": {"rich_text": _rich_text(slack_channel_id)},
+        "Date & Time": {"date": date_payload},
+        "Google Meet URL": {"url": meet_link or None},
+        "Status": {"select": {"name": status}},
+    }
+    # Ad-hoc meetings are people-only — leave Department / Team empty.
+    if department:
+        properties["Department / Team"] = {"select": {"name": department}}
+
     page_content = {
         "parent": {"database_id": _meetings_db_id()},
-        "properties": {
-            "Meeting Name": {
-                "title": [{"type": "text", "text": {"content": title}}]
-            },
-            "Department / Team": {"select": {"name": department}},
-            "Slack Channel": {"rich_text": _rich_text(slack_channel)},
-            "Slack Channel ID": {"rich_text": _rich_text(slack_channel_id)},
-            "Date & Time": {"date": date_payload},
-            "Google Meet URL": {"url": meet_link or None},
-            "Status": {"select": {"name": status}},
-        },
+        "properties": properties,
     }
 
     async with httpx.AsyncClient(timeout=20.0) as client:
@@ -191,3 +195,105 @@ async def sync_transcript_results(
             )
         )
     return {"summary": summary_result, "directives": directives}
+
+
+def _normalize_meet_url(meet_url: str) -> str:
+    return (meet_url or "").strip().rstrip("/")
+
+
+async def find_meeting_page_by_meet_url(meet_url: str) -> Optional[Dict[str, Any]]:
+    """
+    Look up a Meetings & Summaries row by Google Meet URL.
+    Used by the hosted webhook when local SQLite is unavailable.
+    Returns {id, meeting_title} or None.
+    """
+    target = _normalize_meet_url(meet_url)
+    if not target:
+        return None
+
+    headers = get_notion_headers()
+    # Try exact URL and trailing-slash variant (Notion stores what Calendar gave).
+    candidates = [target, target + "/"]
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        for candidate in candidates:
+            response = await client.post(
+                f"{NOTION_API_URL}/databases/{_meetings_db_id()}/query",
+                headers=headers,
+                json={
+                    "filter": {
+                        "property": "Google Meet URL",
+                        "url": {"equals": candidate},
+                    },
+                    "page_size": 1,
+                },
+            )
+            if response.status_code >= 400:
+                raise RuntimeError(
+                    f"Notion meet URL lookup failed: {response.text}"
+                )
+            results = response.json().get("results") or []
+            if not results:
+                continue
+            page = results[0]
+            title_parts = (
+                page.get("properties", {})
+                .get("Meeting Name", {})
+                .get("title", [])
+            )
+            title = "".join(
+                part.get("plain_text", "") for part in title_parts
+            ) or "Meeting"
+            return {
+                "id": page["id"],
+                "meeting_title": title,
+                "meet_url": candidate,
+            }
+    return None
+
+
+async def finalize_meeting_without_transcript(meeting_page_id: str) -> Dict[str, Any]:
+    """
+    Mark Status=Completed and append a note that no transcript arrived.
+    Does not invent a summary or action items.
+    """
+    headers = get_notion_headers()
+    note = (
+        "No transcript was received for this meeting. "
+        "Status marked Completed without summary or action items."
+    )
+    children = [
+        {
+            "object": "block",
+            "type": "heading_2",
+            "heading_2": {"rich_text": _rich_text("Meeting closed")},
+        },
+        {
+            "object": "block",
+            "type": "paragraph",
+            "paragraph": {"rich_text": _rich_text(note)},
+        },
+    ]
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        append_response = await client.patch(
+            f"{NOTION_API_URL}/blocks/{meeting_page_id}/children",
+            headers=headers,
+            json={"children": children},
+        )
+        if append_response.status_code >= 400:
+            raise RuntimeError(
+                f"Notion finalize note failed: {append_response.text}"
+            )
+        update_response = await client.patch(
+            f"{NOTION_API_URL}/pages/{meeting_page_id}",
+            headers=headers,
+            json={"properties": {"Status": {"select": {"name": "Completed"}}}},
+        )
+        if update_response.status_code >= 400:
+            raise RuntimeError(
+                f"Notion finalize status failed: {update_response.text}"
+            )
+        return {
+            "appended": append_response.json(),
+            "page": update_response.json(),
+            "note": note,
+        }

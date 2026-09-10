@@ -120,9 +120,9 @@ def main() -> int:
                 "options": [
                     {"name": "Engineering", "color": "blue"},
                     {"name": "Product", "color": "purple"},
-                    {"name": "Sales", "color": "green"},
-                    {"name": "Design", "color": "pink"},
-                    {"name": "Cross-Functional", "color": "gray"},
+                    {"name": "Cloud", "color": "orange"},
+                    {"name": "Data Science", "color": "green"},
+                    {"name": "Security", "color": "red"},
                 ]
             }
         },

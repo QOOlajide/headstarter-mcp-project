@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Meet Caption Hub — Options</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 40rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        line-height: 1.45;
+      }
+      label {
+        display: block;
+        font-weight: 600;
+        margin-bottom: 0.35rem;
+      }
+      input[type="url"] {
+        width: 100%;
+        padding: 0.5rem;
+        box-sizing: border-box;
+      }
+      button {
+        margin-top: 0.75rem;
+        padding: 0.45rem 0.9rem;
+      }
+      .hint {
+        color: #444;
+        font-size: 0.9rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Meet Caption Hub</h1>
+    <p class="hint">
+      Webhook URL for the FastAPI transcript hub (local uvicorn or your Docker
+      host). Must accept POST JSON with meet_url and transcript.
+    </p>
+    <label for="webhookUrl">Webhook URL</label>
+    <input
+      id="webhookUrl"
+      type="url"
+      placeholder="http://127.0.0.1:8000/webhook/transcript"
+    />
+    <button id="save" type="button">Save</button>
+    <p id="status" class="hint"></p>
+    <script src="options.js"></script>
+  </body>
+</html>

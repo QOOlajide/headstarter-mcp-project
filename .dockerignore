@@ -1,0 +1,13 @@
+.git
+.venv
+venv
+**/__pycache__
+**/*.pyc
+meeting_cache.db
+token.json
+credentials.json
+.env
+*.md
+extension
+docs
+.cursor
