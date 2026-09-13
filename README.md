@@ -49,29 +49,52 @@ Bot must be **in** each channel.
 
 ## Setup
 
-```powershell
-.\venv\Scripts\python.exe -m pip install -r requirements.txt
-```
+**Requires Python 3.10+** (3.12 recommended). The `mcp` package will not install on older Python.
+
+### 1. Create a venv on this machine
+
+Do **not** copy `venv/` from another computer or OS. Windows and Mac put Python in different folders inside `venv/`.
+
+| OS | Create venv | Install packages (use this Python’s pip) | `.cursor/mcp.json` `command` |
+|---|---|---|---|
+| Mac / Linux | `python3.12 -m venv venv` | `./venv/bin/python -m pip install -r requirements.txt` | `${workspaceFolder}/venv/bin/python` |
+| Windows | `py -3.12 -m venv venv` | `.\venv\Scripts\python.exe -m pip install -r requirements.txt` | `${workspaceFolder}/venv/Scripts/python.exe` |
+
+Always install with `…/python -m pip …` from the table above. That installs into **this** venv. A bare `pip install` on PATH might use a different (often older) Python and cause the errors below.
+
+`requirements.txt` pins `mcp[cli]>=1.21.1,<2` so pip does not install MCP SDK v2 (this project’s `@server.list_tools()` API is v1).
+
+### 2. Env and Google auth
 
 `.env`: `SLACK_BOT_TOKEN`, `NOTION_API_KEY`, `NOTION_MEETINGS_DATABASE_ID`, `NOTION_DIRECTIVES_DATABASE_ID`, `GEMINI_API_KEY`; optional `SCHEDULER_TIMEZONE`, `SCHEDULER_SEARCH_DAYS`. Google: `credentials.json` / `token.json`.
 
-```powershell
+```bash
+# Mac / Linux
+./venv/bin/python scripts/setup_notion_dbs.py --parent-page-id "YOUR_PARENT_PAGE_URL" --write-env
+
+# Windows
 .\venv\Scripts\python.exe scripts\setup_notion_dbs.py --parent-page-id "YOUR_PARENT_PAGE_URL" --write-env
 ```
 
-MCP: `.cursor/mcp.json` (`envFile` → `.env`). Restart MCP after `.env` changes.
+### 3. Point Cursor at the venv Python
+
+Edit `.cursor/mcp.json` so `command` matches your OS row in the table above (`envFile` → `.env`). Restart the MCP server after `.env` or path changes.
 
 ### Transcript hub (FastAPI)
 
-Local debug:
+Local debug (use your venv Python from the Setup table):
 
-```powershell
+```bash
+# Mac / Linux
+./venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8000
+
+# Windows
 .\venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
 Docker (same hub, portable; pass secrets via env — do not bake `.env` into the image):
 
-```powershell
+```bash
 docker compose up --build
 # or: docker build -t meeting-hub . && docker run --env-file .env -p 8000:8000 meeting-hub
 ```
@@ -115,6 +138,22 @@ logic/meeting_cache.py
 ```
 
 ## Troubleshooting
+
+### Setup errors we hit (and what they mean)
+
+**1. `spawn …/venv/Scripts/python.exe EACCES` (Mac)**  
+Cursor tried to start the MCP server using the path in `mcp.json`. That path was a **Windows** Python (`Scripts/python.exe`). A Mac cannot run `.exe` files, so the process never started.  
+**Fix:** create a Mac venv and set `command` to `venv/bin/python`.
+
+**2. `Could not find a version that satisfies the requirement mcp`**  
+Pip only offers package versions that support **your current Python**. With Python 3.9, every `mcp` release was skipped (they need 3.10+), so pip reported “no matching version” even though `mcp` exists on PyPI.  
+**Fix:** install Python 3.10+, recreate the venv with it, then install with that venv’s `python -m pip`.
+
+**3. `AttributeError: 'Server' object has no attribute 'list_tools'`**  
+The server started, but the installed `mcp` was **v2**, while `mcp_server.py` uses the **v1** decorator `@server.list_tools()`. That happened because `requirements.txt` said `mcp>=1.21.1` with no upper bound, so pip took the newest major version (2.x).  
+**Fix:** pin `mcp[cli]>=1.21.1,<2` and reinstall.
+
+### Runtime
 
 - Slack `channel_not_found`: bot not in channel, or stale `meeting_cache.db`.
 - Notion property errors: wrong DB IDs / schema (see `journal.md` for Notion 2026).
