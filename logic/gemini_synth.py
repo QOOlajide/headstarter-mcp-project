@@ -21,9 +21,12 @@ EXTRACTION_PROMPT = """You are a meeting analyst. Given a raw meeting transcript
     }
   ]
 }
-When assigning action items, prefer emails from the known participant email list.
-If only a first name/handle is spoken, map it to the matching known email when possible.
-Use empty strings / empty arrays when unknown. Prefer ISO due dates when a deadline is implied.
+Assignee rules (strict):
+- assignee_email MUST be copied exactly from the KNOWN PARTICIPANT EMAILS list below.
+- If a spoken name/handle clearly matches one known email, use that email.
+- NEVER invent, guess, or output an email that is not on that list.
+- If the owner is unclear or not on the list, set assignee_email to "".
+- Prefer ISO due dates when a deadline is implied. Use empty strings / empty arrays when unknown.
 """
 
 
@@ -54,13 +57,20 @@ def synthesize_transcript(
         generation_config={"response_mime_type": "application/json"},
     )
 
-    known = known_emails or []
-    known_block = (
-        "KNOWN PARTICIPANT EMAILS (from Slack profiles):\n"
-        + "\n".join(f"- {e}" for e in known)
-        if known
-        else "KNOWN PARTICIPANT EMAILS: (none provided)"
-    )
+    known = [e.strip().lower() for e in (known_emails or []) if e and str(e).strip()]
+    known_set = set(known)
+    if known:
+        known_block = (
+            "KNOWN PARTICIPANT EMAILS (from Slack profiles) — "
+            "assignee_email MUST be one of these exactly, or \"\":\n"
+            + "\n".join(f"- {e}" for e in known)
+        )
+    else:
+        known_block = (
+            "KNOWN PARTICIPANT EMAILS: (none provided)\n"
+            "Because the list is empty, every action item MUST use "
+            'assignee_email: "". Do not invent any email addresses.'
+        )
 
     response = model.generate_content(
         f"{EXTRACTION_PROMPT}\n\n{known_block}\n\nTRANSCRIPT:\n{transcript}"
@@ -70,4 +80,10 @@ def synthesize_transcript(
 
     summary: List[str] = data.get("summary_bullets") or []
     actions: List[Dict[str, Any]] = data.get("action_items") or []
+    # Hard filter: drop any assignee_email not in the known meeting list.
+    for item in actions:
+        if not isinstance(item, dict):
+            continue
+        email = (item.get("assignee_email") or "").strip().lower()
+        item["assignee_email"] = email if email in known_set else ""
     return {"summary_bullets": summary, "action_items": actions}

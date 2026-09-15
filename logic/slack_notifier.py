@@ -353,24 +353,35 @@ def map_assignee_to_email(
     participants: List[dict],
 ) -> str:
     """
-    Map Gemini assignee (name/handle/email) → Slack profile email for Notion.
+    Map Gemini assignee (name/handle/email) → a meeting participant email only.
+    Never returns an address outside the provided participants list.
     """
     if not raw_assignee:
         return ""
     raw = raw_assignee.strip()
     lower = raw.lower().lstrip("@")
+    allowed = {
+        (p.get("email") or "").strip().lower()
+        for p in participants
+        if (p.get("email") or "").strip()
+    }
+    if not allowed:
+        return ""
 
     if "@" in raw and "." in raw.split("@")[-1]:
-        return raw.lower()
+        candidate = raw.lower()
+        return candidate if candidate in allowed else ""
 
     for p in participants:
         email = (p.get("email") or "").lower()
+        if not email or email not in allowed:
+            continue
         handle = (p.get("handle") or "").lower()
         display = (p.get("display_name") or "").lower()
         if lower == handle or lower == display:
             return email
         if display and (lower in display or display in lower):
             return email
-        if email and lower == email.split("@")[0]:
+        if lower == email.split("@")[0]:
             return email
-    return raw  # leave unresolved string rather than inventing an email
+    return ""

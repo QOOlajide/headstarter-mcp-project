@@ -158,11 +158,17 @@ async def webhook_transcript(request: Request):
             mapped = map_assignee_to_email(
                 item.get("assignee_email", ""), participants
             )
+            # Only keep emails that belong to this meeting's participant list.
+            allowed = {e.strip().lower() for e in known_emails if e}
             if mapped and "@" not in mapped:
                 cached = get_slack_user(mapped)
                 if cached and cached.get("email"):
                     mapped = cached["email"]
-            item = {**item, "assignee_email": mapped}
+            mapped_norm = (mapped or "").strip().lower()
+            item = {
+                **item,
+                "assignee_email": mapped_norm if mapped_norm in allowed else "",
+            }
             action_items.append(item)
 
         notion_result = await sync_transcript_results(
