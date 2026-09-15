@@ -44,7 +44,16 @@
       placeholder="http://127.0.0.1:8000/webhook/transcript"
     />
     <button id="save" type="button">Save</button>
+    <button id="testHub" type="button">Test hub</button>
+    <button id="testPost" type="button">Test POST</button>
+    <button id="sendNow" type="button">Send captured transcript now</button>
     <p id="status" class="hint"></p>
+    <p class="hint">
+      “Test POST” sends a dummy transcript; HTTP 404 (“No meeting found”) is a
+      pass — it means the POST reached uvicorn. “Send captured transcript now”
+      posts whatever captions are buffered for open Meet tabs, for when a call
+      ended without a summary.
+    </p>
     <script src="options.js"></script>
   </body>
 </html>

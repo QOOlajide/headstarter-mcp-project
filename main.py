@@ -7,6 +7,7 @@ from typing import List, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from logic.meeting_orchestrator import schedule_meeting_workflow
@@ -14,6 +15,17 @@ from logic.meeting_orchestrator import schedule_meeting_workflow
 load_dotenv()
 
 app = FastAPI(title="Meeting Automation Hub")
+
+# Meet pages and the extension post JSON here. Without CORS (and Chrome's
+# private-network opt-in for a public page calling localhost) the browser
+# blocks the preflight and the transcript never reaches this server.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r"^(https://meet\.google\.com|chrome-extension://.*)$",
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_private_network=True,
+)
 
 
 class MeetingRequest(BaseModel):

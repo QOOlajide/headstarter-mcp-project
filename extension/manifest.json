@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Meet Caption → Meeting Hub",
-  "version": "1.0.0",
-  "description": "Buffers Google Meet live captions and beacons them to your meeting automation hub on leave.",
+  "version": "1.0.1",
+  "description": "Buffers Google Meet live captions and posts them to your meeting automation hub on leave.",
   "permissions": ["storage"],
   "host_permissions": [
     "https://meet.google.com/*",
@@ -10,6 +10,9 @@
     "http://localhost/*",
     "https://*/*"
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
       "matches": ["https://meet.google.com/*"],
