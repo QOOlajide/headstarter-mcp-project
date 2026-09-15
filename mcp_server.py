@@ -10,10 +10,10 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-from config import Config
-
 load_dotenv()
-Config.print_config_status()
+
+# Do not print to stdout/stderr at import time — MCP uses stdio for JSON-RPC,
+# and Cursor may treat early stderr as a failed connection.
 
 server = Server("meeting-scheduler")
 
