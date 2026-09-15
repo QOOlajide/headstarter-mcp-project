@@ -322,6 +322,7 @@ async def schedule_meeting_workflow(
             meeting_title=meeting_title,
             department=notion_department or "",
             participant_emails=emails,
+            ends_at=end_dt.isoformat(),
         )
 
     return {

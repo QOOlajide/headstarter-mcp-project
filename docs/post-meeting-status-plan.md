@@ -2,11 +2,12 @@
 
 ## Status
 
-Implemented.
+Implemented (including auto-finalize while the FastAPI hub is running).
 
 - `logic/notion_client.py` → `finalize_meeting_without_transcript`
 - REST `POST /finalize-meeting` in `main.py`
 - MCP tool `finalize_meeting` in `mcp_server.py`
+- Background loop `logic/auto_finalize.py` started from FastAPI lifespan
 
 ## Behavior
 
@@ -23,10 +24,14 @@ When a transcript **does** arrive via `/webhook/transcript`, summary + directive
 
 ## How to trigger
 
+- **Automatic (preferred):** keep the hub running (`uvicorn`). After scheduled end time + grace (`AUTO_FINALIZE_GRACE_MINUTES`, default 5), overdue `Scheduled` Notion rows (and local SQLite active meetings) are finalized.
 - Explicit: MCP `finalize_meeting` or `POST /finalize-meeting` with `meet_url` or `notion_page_id`
-- Lookup: SQLite active-meeting cache, else Notion filter on `Google Meet URL`
+- Manual tick: `POST /auto-finalize/run`
+- Lookup: SQLite active-meeting cache, else Notion filter on `Status=Scheduled` + past `Date & Time`
 
-Auto-finalize on Calendar end time is still out of scope.
+Env knobs: `AUTO_FINALIZE_ENABLED` (default true), `AUTO_FINALIZE_GRACE_MINUTES` (default 0 — flip as soon as end time passes), `AUTO_FINALIZE_POLL_SECONDS` (30).
+
+Notion API 2026 queries use `/v1/data_sources/{id}/query` (resolved from the meetings database id, or `NOTION_MEETINGS_DATA_SOURCE_ID`).
 
 ## Relation to MCP scope
 

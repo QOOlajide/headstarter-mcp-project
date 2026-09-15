@@ -2,7 +2,12 @@
 FastAPI webhook hub + optional REST scheduling endpoint.
 Exposes POST /webhook/transcript for Meet caption scraper beacons
 and POST /finalize-meeting when no transcript arrives.
+While running, auto-finalizes Scheduled meetings after end time + grace
+if no transcript arrived.
 """
+import asyncio
+import logging
+from contextlib import asynccontextmanager
 from typing import List, Optional
 
 from dotenv import load_dotenv
@@ -14,7 +19,28 @@ from logic.meeting_orchestrator import schedule_meeting_workflow
 
 load_dotenv()
 
-app = FastAPI(title="Meeting Automation Hub")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("meeting_hub")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    from logic.auto_finalize import auto_finalize_loop
+
+    stop_event = asyncio.Event()
+    task = asyncio.create_task(auto_finalize_loop(stop_event))
+    logger.info("Meeting hub started (auto-finalize background task running)")
+    try:
+        yield
+    finally:
+        stop_event.set()
+        try:
+            await asyncio.wait_for(task, timeout=5)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            task.cancel()
+
+
+app = FastAPI(title="Meeting Automation Hub", lifespan=lifespan)
 
 # Meet pages and the extension post JSON here. Without CORS (and Chrome's
 # private-network opt-in for a public page calling localhost) the browser
@@ -237,4 +263,22 @@ async def finalize_meeting(request: FinalizeMeetingRequest):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    from logic.auto_finalize import _enabled, _grace_minutes, _poll_seconds
+
+    return {
+        "status": "ok",
+        "auto_finalize": {
+            "enabled": _enabled(),
+            "grace_minutes": _grace_minutes(),
+            "poll_seconds": _poll_seconds(),
+        },
+    }
+
+
+
+@app.post("/auto-finalize/run")
+async def auto_finalize_run():
+    """Manual tick for testing; same logic as the background loop."""
+    from logic.auto_finalize import run_auto_finalize_once
+
+    return await run_auto_finalize_once()

@@ -39,11 +39,12 @@ def init_db() -> None:
                 meeting_title TEXT NOT NULL,
                 department TEXT NOT NULL,
                 participant_emails TEXT DEFAULT '[]',
+                ends_at TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """
         )
-        # Migrate older DBs missing participant_emails
+        # Migrate older DBs missing newer columns
         cols = {
             row["name"]
             for row in conn.execute("PRAGMA table_info(active_meetings)").fetchall()
@@ -52,6 +53,8 @@ def init_db() -> None:
             conn.execute(
                 "ALTER TABLE active_meetings ADD COLUMN participant_emails TEXT DEFAULT '[]'"
             )
+        if "ends_at" not in cols:
+            conn.execute("ALTER TABLE active_meetings ADD COLUMN ends_at TEXT")
 
 
 def get_channel_id(team_slug: str) -> Optional[str]:
@@ -115,6 +118,7 @@ def store_active_meeting(
     meeting_title: str,
     department: str,
     participant_emails: Optional[list[str]] = None,
+    ends_at: Optional[str] = None,
 ) -> None:
     init_db()
     emails_json = json.dumps(participant_emails or [])
@@ -123,16 +127,24 @@ def store_active_meeting(
             """
             INSERT INTO active_meetings (
                 meet_url, notion_meeting_page_id, meeting_title,
-                department, participant_emails
+                department, participant_emails, ends_at
             )
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(meet_url) DO UPDATE SET
                 notion_meeting_page_id = excluded.notion_meeting_page_id,
                 meeting_title = excluded.meeting_title,
                 department = excluded.department,
-                participant_emails = excluded.participant_emails
+                participant_emails = excluded.participant_emails,
+                ends_at = COALESCE(excluded.ends_at, active_meetings.ends_at)
             """,
-            (meet_url, notion_meeting_page_id, meeting_title, department, emails_json),
+            (
+                meet_url,
+                notion_meeting_page_id,
+                meeting_title,
+                department,
+                emails_json,
+                ends_at,
+            ),
         )
 
 
@@ -157,3 +169,65 @@ def delete_active_meeting(meet_url: str) -> None:
     init_db()
     with _connect() as conn:
         conn.execute("DELETE FROM active_meetings WHERE meet_url = ?", (meet_url,))
+
+
+def _parse_iso(value: Optional[str]):
+    if not value:
+        return None
+    from datetime import datetime
+
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def list_due_active_meetings(cutoff) -> list[dict[str, Any]]:
+    """Active meetings whose ends_at is set and <= cutoff (aware datetime)."""
+    init_db()
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM active_meetings
+            WHERE ends_at IS NOT NULL AND ends_at != ''
+            """
+        ).fetchall()
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        data = dict(row)
+        ends = _parse_iso(data.get("ends_at"))
+        if ends is None:
+            continue
+        if ends.tzinfo is None and getattr(cutoff, "tzinfo", None) is not None:
+            # Treat naive ends_at as same timezone as cutoff
+            ends = ends.replace(tzinfo=cutoff.tzinfo)
+        try:
+            if ends > cutoff:
+                continue
+        except TypeError:
+            continue
+        try:
+            data["participant_emails"] = json.loads(
+                data.get("participant_emails") or "[]"
+            )
+        except json.JSONDecodeError:
+            data["participant_emails"] = []
+        results.append(data)
+    return results
+
+
+def list_active_meetings() -> list[dict[str, Any]]:
+    init_db()
+    with _connect() as conn:
+        rows = conn.execute("SELECT * FROM active_meetings").fetchall()
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        data = dict(row)
+        try:
+            data["participant_emails"] = json.loads(
+                data.get("participant_emails") or "[]"
+            )
+        except json.JSONDecodeError:
+            data["participant_emails"] = []
+        results.append(data)
+    return results

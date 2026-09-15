@@ -8,7 +8,7 @@ Cursor MCP server that schedules meetings from natural language: Slack is the ro
 2. **Slack** — department → team channel + `<!channel>`; ad-hoc → group DM. Emails from Slack profiles.
 3. **Google Calendar** — Meet link + calendar hold for those emails (`sendUpdates=all`).
 4. **Notion** — Scheduled row in Meetings & Summaries.
-5. **After the call (companion)** — Chrome extension buffers Live Captions; on leave beacons to the FastAPI hub → Gemini → summary + Actionable Directives. Or MCP/REST `finalize_meeting` marks Completed with a no-transcript note.
+5. **After the call (companion)** — Chrome extension buffers Live Captions; on leave beacons to the FastAPI hub → Gemini → summary + Actionable Directives. If no transcript arrives, the hub auto-finalizes after end time + grace (or MCP/REST `finalize_meeting`).
 
 ## How the meeting time is chosen
 
