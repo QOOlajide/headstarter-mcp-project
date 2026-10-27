@@ -8,6 +8,10 @@
 
 [![MCP Meeting Scheduler Demo](assets/demo.gif)](assets/linkedin_demo_v2_proof_chain.mp4)
 
+https://github.com/user-attachments/assets/2f7916c2-5052-4959-92aa-620317fd19d7
+
+
+
 **What the demo demonstrates:**
 1. **Cursor Dispatch:** Natural language prompt schedules a meeting via local MCP stdio.
 2. **Slack Confirmation:** The MCP posts to the designated team channel (or group DM) with `<!channel>` and the Google Meet URL.
